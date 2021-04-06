@@ -40,7 +40,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)writeFormat:(NSString *)format args:(va_list)args;
 
 - (void)send:(id)obj;
-- (void)sendData:(NSData *)data;
+- (void)sendData:(NSData *)data NS_SWIFT_NAME(sendData(_:));
 - (void)sendString:(NSString *)string;
 - (void)sendFormat:(NSString *)format, ...;
 - (void)sendFormat:(NSString *)format args:(va_list)args;
