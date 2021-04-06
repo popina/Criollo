@@ -174,7 +174,7 @@ static const NSData * CRLFCRLFData;
         BOOL result = YES;
 
         if ([contentType hasPrefix:CRRequestTypeJSON]) {
-            result = [self.requestBeingReceived parseJSONBodyData:&bodyParsingError];
+            result = [self.requestBeingReceived parseBufferedBodyData:&bodyParsingError];
         } else if ([contentType hasPrefix:CRRequestTypeURLEncoded]) {
             result = [self.requestBeingReceived parseURLEncodedBodyData:&bodyParsingError];
         } else if ([contentType hasPrefix:CRRequestTypeMultipart]) {
