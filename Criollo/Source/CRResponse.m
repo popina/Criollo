@@ -74,7 +74,7 @@
     if ( headerValue == nil ) {
         headerValue = @"";
     }
-    headerValue = [headerValue stringByAppendingFormat:@", %@", value];
+    headerValue = [headerValue stringByAppendingFormat:@" %@", value];
     [self setValue:headerValue forHTTPHeaderField:HTTPHeaderField];
 }
 
