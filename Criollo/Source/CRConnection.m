@@ -140,7 +140,7 @@ NS_ASSUME_NONNULL_END
         BOOL result = YES;
 
         if (contentType.requestContentType == CRRequestContentTypeJSON) {
-            result = [self.requestBeingReceived parseJSONBodyData:&bodyParsingError];
+            result = [self.requestBeingReceived parseBufferedBodyData:&bodyParsingError];
         } else if (contentType.requestContentType == CRRequestContentTypeURLEncoded) {
             result = [self.requestBeingReceived parseURLEncodedBodyData:&bodyParsingError];
         } else if (contentType.requestContentType == CRRequestContentTypeMultipart) {
