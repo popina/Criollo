@@ -6,22 +6,21 @@
 //  Copyright © 2015 Cătălin Stan. All rights reserved.
 //
 
-#import "CRConnection.h"
+#import <Criollo/CRConnection.h>
 
-#import <CocoaAsyncSocket/GCDAsyncSocket.h>
+#import <Criollo/CRApplication.h>
+#import <Criollo/CRRequest.h>
+#import <Criollo/CRResponse.h>
+#import <Criollo/CRServer.h>
+#import <sys/sysctl.h>
+#import <sys/types.h>
 
+#import "CocoaAsyncSocket.h"
 #import "CRConnection_Internal.h"
-#import "CRApplication.h"
-#import "CRServer.h"
+#import "CRRequest_Internal.h"
+#import "CRResponse_Internal.h"
 #import "CRServer_Internal.h"
 #import "CRServerConfiguration.h"
-#import "CRRequest.h"
-#import "CRRequest_Internal.h"
-#import "CRResponse.h"
-#import "CRResponse_Internal.h"
-
-#include <sys/types.h>
-#include <sys/sysctl.h>
 #import "NSDate+RFC1123.h"
 
 static int const CRConnectionSocketTagSendingResponse = 20;
@@ -32,11 +31,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface CRConnection ()
 
+@property (nonatomic, weak, nullable) id<CRConnectionDelegate> delegate;
+
 @property (nonatomic, strong) NSLock *requestsLock;
 @property (nonatomic, strong) NSMutableArray<CRRequest *> * requests;
 
-- (void)bufferBodyData:(NSData *)data forRequest:(CRRequest *)request;
-- (void)bufferResponseData:(NSData *)data forRequest:(CRRequest *)request;
+- (void)bufferBodyData:(NSData *)data request:(CRRequest *)request;
+
+- (void)bufferResponseData:(NSData *)data request:(CRRequest *)request;
 
 @end
 
@@ -44,56 +46,27 @@ NS_ASSUME_NONNULL_END
 
 @implementation CRConnection
 
-static const NSData * CRLFData;
-static const NSData * CRLFCRLFData;
-
-+ (void)initialize {
-    CRLFData = [NSData dataWithBytes:"\x0D\x0A" length:2];
-    CRLFCRLFData = [NSData dataWithBytes:"\x0D\x0A\x0D\x0A" length:4];
-}
-
-+ (NSData *)CRLFCRLFData {
-    return (NSData *)CRLFCRLFData;
-}
-
-+ (NSData *)CRLFData {
-    return (NSData *)CRLFData;
-}
-
 #pragma mark - Responses
 
-- (CRResponse *)responseWithHTTPStatusCode:(NSUInteger)HTTPStatusCode {
-    return [self responseWithHTTPStatusCode:HTTPStatusCode description:nil version:CRHTTPVersion1_1];
-}
-
-- (CRResponse *)responseWithHTTPStatusCode:(NSUInteger)HTTPStatusCode description:(NSString *)description {
-    return [self responseWithHTTPStatusCode:HTTPStatusCode description:description version:CRHTTPVersion1_1];
-}
-
-- (CRResponse *)responseWithHTTPStatusCode:(NSUInteger)HTTPStatusCode description:(NSString *)description version:(CRHTTPVersion)version {
-    return [[CRResponse alloc] initWithConnection:self HTTPStatusCode:HTTPStatusCode description:description version:version];
-}
+- (CRResponse *)responseWithHTTPStatusCode:(NSUInteger)HTTPStatusCode description:(NSString *)description version:(CRHTTPVersion)version CR_OBJC_ABSTRACT;
 
 #pragma mark - Initializers
 
-- (instancetype)init {
-    return [self initWithSocket:nil server:nil];
-}
-
-- (instancetype)initWithSocket:(GCDAsyncSocket *)socket server:(CRServer *)server {
+- (instancetype)initWithSocket:(GCDAsyncSocket *)socket server:(CRServer *)server delegate:(id<CRConnectionDelegate> _Nullable)delegate {
     self = [super init];
     if (self != nil) {
         _server = server;
         _socket = socket;
         _socket.delegate = self;
+        _delegate = delegate;
         
         _requests = [NSMutableArray arrayWithCapacity:InitialRequestsCapacity];
         _requestsLock = [NSLock new];
 
-        _remoteAddress = self.socket.connectedHost;
-        _remotePort = self.socket.connectedPort;
-        _localAddress = self.socket.localHost;
-        _localPort = self.socket.localPort;
+        _remoteAddress = _socket.connectedHost;
+        _remotePort = _socket.connectedPort;
+        _localAddress = _socket.localHost;
+        _localPort = _socket.localPort;
     }
     return self;
 }
@@ -125,42 +98,35 @@ static const NSData * CRLFCRLFData;
 
 #pragma mark - Data
 
-- (void)startReading {
-    self.requestBeingReceived = nil;
-}
+- (void)startReading CR_OBJC_ABSTRACT;
+- (void)didReceiveCompleteHeaders:(CRRequest *)request CR_OBJC_ABSTRACT;
 
-- (void)didReceiveCompleteRequestHeaders {
-    if (self.willDisconnect) {
-        return;
-    }
-}
-
-- (void)didReceiveRequestBodyData:(NSData *)data {
+- (void)didReceiveBodyData:(NSData *)data request:(CRRequest *)request {
     if (self.willDisconnect) {
         return;
     }
 
-    NSString * contentType = self.requestBeingReceived.env[@"HTTP_CONTENT_TYPE"];
-    if ([contentType hasPrefix:CRRequestTypeURLEncoded]) {
+    NSString * contentType = request.env[@"HTTP_CONTENT_TYPE"];
+    if (contentType.requestContentType == CRRequestContentTypeURLEncoded) {
         // URL-encoded requests are parsed after we have all the data
-        [self bufferBodyData:data forRequest:self.requestBeingReceived];
-    } else if ([contentType hasPrefix:CRRequestTypeMultipart]) {
+        [self bufferBodyData:data request:request];
+    } else if (contentType.requestContentType == CRRequestContentTypeMultipart) {
         NSError* multipartParsingError;
-        if ( ![self.requestBeingReceived parseMultipartBodyDataChunk:data error:&multipartParsingError] ) {
+        if (![request parseMultipartBodyDataChunk:data error:&multipartParsingError]) {
             [CRApp logErrorFormat:@"%@" , multipartParsingError];
         }
-    } else if ([contentType hasPrefix:CRRequestTypeJSON]) {
+    } else if (contentType.requestContentType == CRRequestContentTypeJSON) {
         // JSON requests are parsed after we have all the data
-        [self bufferBodyData:data forRequest:self.requestBeingReceived];
+        [self bufferBodyData:data request:request];
     } else {
         NSError* mimeParsingError;
-        if ( ![self.requestBeingReceived parseMIMEBodyDataChunk:data error:&mimeParsingError] ) {
+        if ( ![request parseMIMEBodyDataChunk:data error:&mimeParsingError] ) {
             [CRApp logErrorFormat:@"%@" , mimeParsingError];
         }
     }
 }
 
-- (void)didReceiveCompleteRequest {
+- (void)didReceiveCompleteRequest:(CRRequest *)request {
     if (self.willDisconnect) {
         return;
     }
@@ -173,11 +139,11 @@ static const NSData * CRLFCRLFData;
 
         BOOL result = YES;
 
-        if ([contentType hasPrefix:CRRequestTypeJSON]) {
+        if (contentType.requestContentType == CRRequestContentTypeJSON) {
             result = [self.requestBeingReceived parseBufferedBodyData:&bodyParsingError];
-        } else if ([contentType hasPrefix:CRRequestTypeURLEncoded]) {
+        } else if (contentType.requestContentType == CRRequestContentTypeURLEncoded) {
             result = [self.requestBeingReceived parseURLEncodedBodyData:&bodyParsingError];
-        } else if ([contentType hasPrefix:CRRequestTypeMultipart]) {
+        } else if (contentType.requestContentType == CRRequestContentTypeMultipart) {
             // multipart/form-data requests are parsed as they come in and not once the
             // request hast been fully received ;)
         } else {
@@ -187,18 +153,19 @@ static const NSData * CRLFCRLFData;
         }
 
         if ( !result ) {
+            // TODO: Propagate the error, do not log from here
             [CRApp logErrorFormat:@"%@" , bodyParsingError];
         }
     }
 
-    CRResponse* response = [self responseWithHTTPStatusCode:200];
+    CRResponse* response = [self responseWithHTTPStatusCode:200 description:nil version:self.requestBeingReceived.version];
     self.requestBeingReceived.response = response;
     response.request = self.requestBeingReceived;
     [self.delegate connection:self didReceiveRequest:self.requestBeingReceived response:response];
     [self startReading];
 }
 
-- (void)bufferBodyData:(NSData *)data forRequest:(CRRequest *)request {
+- (void)bufferBodyData:(NSData *)data request:(CRRequest *)request {
     if (self.willDisconnect) {
         return;
     }
@@ -206,7 +173,7 @@ static const NSData * CRLFCRLFData;
     [request bufferBodyData:data];
 }
 
-- (void)bufferResponseData:(NSData *)data forRequest:(CRRequest *)request {
+- (void)bufferResponseData:(NSData *)data request:(CRRequest *)request {
     if ( self.willDisconnect ) {
         return;
     }
@@ -214,11 +181,10 @@ static const NSData * CRLFCRLFData;
     [request bufferResponseData:data];
 }
 
-- (void)sendDataToSocket:(NSData *)data forRequest:(CRRequest *)request {
+- (void)sendData:(NSData *)data request:(CRRequest *)request {
     if (self.willDisconnect) {
         return;
     }
-    
     
     if ( request == self.firstRequest ) {
         request.bufferedResponseData = nil;
@@ -231,7 +197,7 @@ static const NSData * CRLFCRLFData;
             [self didFinishResponseForRequest:request];
         }
     } else {
-        [self bufferResponseData:data forRequest:request];
+        [self bufferResponseData:data request:request];
     }
 }
 
@@ -256,7 +222,7 @@ static const NSData * CRLFCRLFData;
     if (tag == CRConnectionSocketTagSendingResponse) {
         NSData *bufferedResponseData = self.firstRequest.bufferedResponseData;
         if (bufferedResponseData.length > 0) {
-            [self sendDataToSocket:bufferedResponseData forRequest:self.firstRequest];
+            [self sendData:bufferedResponseData request:self.firstRequest];
         }
     }
 }
