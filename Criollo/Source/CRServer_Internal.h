@@ -6,18 +6,21 @@
 //  Copyright © 2015 Cătălin Stan. All rights reserved.
 //
 
-#import "CRServer.h"
+#import <Criollo/CRServer.h>
 
-#import <CocoaAsyncSocket/GCDAsyncSocket.h>
+#import <Criollo/CRConnection.h>
 
-#import "CRConnection.h"
+#import "CocoaAsyncSocket.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
-@interface CRServer ()  <GCDAsyncSocketDelegate, CRConnectionDelegate>
+@interface CRServer () <GCDAsyncSocketDelegate, CRConnectionDelegate>
 
 @property (nonatomic, strong) CRServerConfiguration * configuration;
+
+//TODO: Consider using NSSet or NSHashTable instead
 @property (nonatomic, strong) NSMutableArray<CRConnection *> * connections;
+
 - (void)didCloseConnection:(CRConnection *)connection;
 
 #pragma mark - Queues

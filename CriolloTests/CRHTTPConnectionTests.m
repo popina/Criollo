@@ -8,12 +8,13 @@
 
 #import <XCTest/XCTest.h>
 #import "CRHTTPConnection.h"
+#import "CRHTTPConnection_Internal.h"
 #import "CRConnection_Internal.h"
 #import "CRRequest.h"
 
 @class GCDAsyncSocket;
 
-#define CRHTTPConnectionCreate() CRHTTPConnection *connection = [[CRHTTPConnection alloc] init]
+#define CRHTTPConnectionCreate() CRHTTPConnection *connection = [[CRHTTPConnection alloc] initWithSocket:nil server:nil delegate:nil]
 
 #define HTTP11Header ([@"GET /myendpoint HTTP/1.1\r\n\
 Host: criollo.io\r\n\
